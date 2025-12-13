@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Foto Upload (Kamera oder Galerie)</title>
+<style>
+    body { font-family: Arial; padding: 20px; max-width: 520px; margin: auto; }
+    #preview { width: 100%; margin-top: 15px; display: none; border-radius: 10px; }
+    #status { margin-top: 10px; font-weight: bold; text-align:center; }
+    button {
+        width: 100%;
+        padding: 14px;
+        margin-top: 12px;
+        font-size: 17px;
+        border: none;
+        border-radius: 10px;
+        color: white;
+    }
+    #cameraBtn { background: #007aff; }
+    #galleryBtn { background: #666; }
+    #uploadBtn { background: #34c759; }
+    input, textarea {
+        width: 100%; padding: 10px; margin-top: 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 15px;
+    }
+    a { display:block; text-align:center; margin-top:20px; color:#007aff; text-decoration:none; }
+</style>
+</head>
+<body>
+
+<h2>Foto Upload</h2>
+
+<!-- Zwei Buttons für klare UX -->
+<button id="cameraBtn">📷 Foto aufnehmen</button>
+<button id="galleryBtn">📁 Aus Galerie wählen</button>
+
+<!-- Zwei versteckte Inputs: einer zwingt Kamera, der andere öffnet Galerie -->
+<input type="file" id="fileInputCamera" accept="image/*" capture="environment" style="display:none">
+<input type="file" id="fileInputGallery" accept="image/*" style="display:none">
+
+<img id="preview" alt="Vorschau">
+
+<input type="text" id="titleInput" placeholder="Titel (optional)">
+<textarea id="descInput" rows="3" placeholder="Beschreibung (optional)"></textarea>
+
+<button id="uploadBtn">Hochladen</button>
+<div id="status">Bereit…</div>
+
+<a href="gallery.html">➡️ Galerie ansehen</a>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+<script>
+/* -------------------------
+   Fallback-Config (eintragen)
+   ------------------------- */
+const fallbackConfig = {
+  apiKey: "DEIN_API_KEY",
+  authDomain: "DEIN_PROJEKT.firebaseapp.com",
+  databaseURL: "https://DEIN_PROJEKT-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "DEIN_PROJEKT",
+  messagingSenderId: "DEINE_SENDER_ID",
+  appId: "DEINE_APP_ID"
+};
+
+/* load config.json mit Fallback */
+async function loadConfig(){
+  try {
+    const r = await fetch('config.json');
+    if(!r.ok) throw new Error('config.json nicht gefunden');
+    return await r.json();
+  } catch(e){
+    console.warn('Nutze Fallback-Config:', e.message);
+    return fallbackConfig;
+  }
+}
+
+async function start(){
+  const cfg = await loadConfig();
+  if (firebase.apps.length === 0) firebase.initializeApp(cfg);
+  const db = firebase.database();
+
+  // Cloudinary: nur Werte einsetzen
+  const cloudName = "dbevz8t2n";
+  const uploadPreset = "unsigned_upload";
+
+  // DOM
+  const cameraBtn = document.getElementById('cameraBtn');
+  const galleryBtn = document.getElementById('galleryBtn');
+  const fileInputCamera = document.getElementById('fileInputCamera');
+  const fileInputGallery = document.getElementById('fileInputGallery');
+  const preview = document.getElementById('preview');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const status = document.getElementById('status');
+  const titleInput = document.getElementById('titleInput');
+  const descInput = document.getElementById('descInput');
+
+  // gemeinsame Variable für gewählte Datei (File-Objekt)
+  let currentFile = null;
+  let currentObjectUrl = null;
+
+  // Wenn Kamera-Button -> öffne camera input
+  cameraBtn.onclick = () => {
+    // klickt den Kamera-Input (der capture="environment" hat)
+    fileInputCamera.click();
+  };
+
+  // Wenn Galerie-Button -> öffne gallery input
+  galleryBtn.onclick = () => {
+    fileInputGallery.click();
+  };
+
+  // Handler für beide Inputs: gleiche Vorschau-/Zuweisungslogik
+  function handleFileSelection(files) {
+    if (!files || files.length === 0) return;
+    // bereinigen vorherige ObjectURL
+    if (currentObjectUrl) {
+      URL.revokeObjectURL(currentObjectUrl);
+      currentObjectUrl = null;
+    }
+    currentFile = files[0];
+    currentObjectUrl = URL.createObjectURL(currentFile);
+    preview.src = currentObjectUrl;
+    preview.style.display = 'block';
+    status.textContent = 'Datei ausgewählt: ' + currentFile.name;
+  }
+
+  fileInputCamera.addEventListener('change', (e) => handleFileSelection(e.target.files));
+  fileInputGallery.addEventListener('change', (e) => handleFileSelection(e.target.files));
+
+  // Upload-Funktion (gleich wie vorher, nutzt currentFile)
+  uploadBtn.onclick = async () => {
+    if (!currentFile) {
+      status.textContent = 'Bitte zuerst ein Foto aufnehmen oder auswählen.';
+      return;
+    }
+
+    status.textContent = 'Lade hoch…';
+
+    const title = titleInput.value.trim();
+    const desc = descInput.value.trim();
+
+    const formData = new FormData();
+    formData.append('file', currentFile);
+    formData.append('upload_preset', uploadPreset);
+
+    try {
+      // Cloudinary Upload
+      const resp = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await resp.json();
+      if (!data.secure_url) throw new Error('Upload zu Cloudinary schlug fehl');
+
+      // Firebase Eintrag
+      await db.ref('bilder').push({
+        url: data.secure_url,
+        title: title || '',
+        desc: desc || '',
+        ts: Date.now()
+      });
+
+      // Aufräumen
+      status.textContent = 'Upload abgeschlossen!';
+      titleInput.value = '';
+      descInput.value = '';
+      currentFile = null;
+      if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
+      preview.style.display = 'none';
+      fileInputCamera.value = ''; // reset input so same file can be selected again
+      fileInputGallery.value = '';
+
+    } catch (err) {
+      console.error(err);
+      status.textContent = 'Fehler beim Hochladen: ' + (err && err.message ? err.message : err);
+    }
+  };
+}
+
+start();
+</script>
+</body>
+</html>
